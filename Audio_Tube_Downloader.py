@@ -2,12 +2,12 @@ import os
 import re
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, TclError
 import yt_dlp
 
-# -----------------------------
+# =============================================================================
 # Configurações / Constantes
-# -----------------------------
+# =============================================================================
 WIN_TITLE = "AudioTube Downloader"
 WIN_SIZE = "600x350"
 ICON_PATH = "player_.ico"  # arquivo .ico (se não existir, será ignorado)
@@ -18,9 +18,9 @@ BTN_COLOR_SELECT = "#4CAF50"
 BTN_COLOR_SELECT_HOVER = "#5DD75D"
 BTN_COLOR_DOWNLOAD = "#007BFF"
 BTN_COLOR_DOWNLOAD_HOVER = "#0056b3"
-FONT_LABEL = ("Arial", 12)
-FONT_SMALL_ITALIC = ("Arial", 10, "italic")
-FONT_BTN = ("Arial", 10)
+FONT_LABEL = ("Roboto", 12)
+FONT_SMALL_ITALIC = ("Roboto", 10, "italic")
+FONT_BTN = ("Roboto", 10)
 FOOTER_TEXT = "© 2025-2030 | Desenvolvido por: Breno Lucas. Todos os direitos reservados."
 
 
@@ -35,6 +35,7 @@ class YouTubeDownloader:
         self.url_var = tk.StringVar()
         self.path_var = tk.StringVar()
         self.is_downloading = False
+        self.validation_label = None
 
         # Barra de progresso temporária central (animação) enquanto a UI principal carrega
         self.loading_progress = ttk.Progressbar(
@@ -46,9 +47,12 @@ class YouTubeDownloader:
         # Agenda a criação dos widgets principais após pequena espera (mesma UX do original)
         self.root.after(1200, self.load_main_ui)
 
-    # -----------------------------
+        # Adiciona trace para validação em tempo real
+        self.url_var.trace_add("write", self.validate_url)
+
+    # =============================================================================
     # Configuração da janela
-    # -----------------------------
+    # =============================================================================
     def _configure_root(self):
         """Configuração básica da janela principal (título, tamanho, ícone, comportamento)."""
         self.root.title(WIN_TITLE)
@@ -62,9 +66,9 @@ class YouTubeDownloader:
             # Falha ao setar o ícone não é crítica — manter a execução
             pass
 
-    # -----------------------------
+    # =============================================================================
     # Carregamento da UI
-    # -----------------------------
+    # =============================================================================
     def load_main_ui(self):
         """
         Remove a barra de carregamento inicial e cria os widgets principais.
@@ -74,15 +78,32 @@ class YouTubeDownloader:
         self.loading_progress.destroy()
         self.create_widgets()
 
-    # -----------------------------
+    # =============================================================================
     # Construção da interface
-    # -----------------------------
+    # =============================================================================
     def create_widgets(self):
         """Cria todos os widgets visuais e organiza o layout da aplicação."""
         # Label e campo de URL
         ttk.Label(self.root, text="🔗 Cole o link do YouTube:", font=FONT_LABEL).pack(pady=10)
-        self.url_entry = ttk.Entry(self.root, textvariable=self.url_var, width=70)
-        self.url_entry.pack(pady=5)
+
+        # Frame para o campo de URL e o label de validação
+        url_frame = ttk.Frame(self.root)
+        url_frame.pack(pady=5)
+
+        self.url_entry = ttk.Entry(url_frame, textvariable=self.url_var, width=65)
+        self.url_entry.pack(side=tk.LEFT)
+
+        self.validation_label = ttk.Label(url_frame, text="", font=FONT_LABEL, width=5)
+        self.validation_label.pack(side=tk.LEFT, padx=5)
+
+        # Bind para Ctrl+V (paste)
+        self.url_entry.bind("<<Paste>>", self.handle_paste)
+
+        # Menu de contexto para o campo de URL
+        self.url_popup = tk.Menu(self.root, tearoff=0)
+        self.url_popup.add_command(label="Copiar", command=self.copy_url)
+        self.url_popup.add_command(label="Colar", command=self.paste_url)
+        self.url_entry.bind("<Button-3>", self.show_url_popup)
 
         # Label e área de seleção de diretório
         ttk.Label(self.root, text="💾 Escolha o diretório para salvar:", font=FONT_LABEL).pack(pady=10)
@@ -92,6 +113,11 @@ class YouTubeDownloader:
         # Campo de caminho (readonly) e botão 'Selecionar'
         self.path_entry = ttk.Entry(path_frame, textvariable=self.path_var, width=50, state="readonly")
         self.path_entry.pack(side=tk.LEFT, padx=5)
+
+        # Menu de contexto para o campo de caminho (somente copiar)
+        self.path_popup = tk.Menu(self.root, tearoff=0)
+        self.path_popup.add_command(label="Copiar", command=self.copy_path)
+        self.path_entry.bind("<Button-3>", self.show_path_popup)
 
         self.btn_select = tk.Button(
             path_frame,
@@ -146,15 +172,80 @@ class YouTubeDownloader:
         self.progress_label.pack()
 
         # Rodapé com direitos autorais
-        footer_label = ttk.Label(self.root, text=FOOTER_TEXT, font=("Arial", 9))
+        footer_label = ttk.Label(self.root, text=FOOTER_TEXT, font=("Roboto", 9))
         footer_label.pack(side=tk.BOTTOM, anchor=tk.W, pady=5, padx=5)
 
         # Clique em qualquer área para remover foco dos campos de entrada
         self.root.bind("<Button-1>", self.remove_focus_on_click)
 
-    # -----------------------------
+    # =============================================================================
+    # Funções para menu de contexto
+    # =============================================================================
+    def show_url_popup(self, event):
+        try:
+            self.url_popup.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.url_popup.grab_release()
+
+    def show_path_popup(self, event):
+        try:
+            self.path_popup.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.path_popup.grab_release()
+
+    def copy_url(self):
+        try:
+            selected = self.url_entry.selection_get()
+            self.root.clipboard_clear()
+            self.root.clipboard_append(selected)
+        except:
+            pass
+
+    def paste_url(self):
+        try:
+            text = self.root.clipboard_get()
+            if len(text) > 180:
+                messagebox.showwarning("Aviso - Tamanho extenso", "O conteúdo colado é muito longo (mais de 180 caracteres). Pode causar problemas na aplicação. Por favor, insira um link válido.")
+                return
+            self.url_entry.insert(tk.INSERT, text)
+        except TclError:
+            messagebox.showwarning("Aviso - Arquivo de Imagem", "O conteúdo da área de transferência não é texto válido (ex: imagem ou GIF). Por favor, cole um link de texto válido.")
+        except Exception as e:
+            messagebox.showerror("Erro", f"Ocorreu um erro ao colar: {str(e)}")
+
+    def handle_paste(self, event):
+        self.paste_url()
+        return "break"
+
+    def copy_path(self):
+        try:
+            selected = self.path_entry.selection_get()
+            self.root.clipboard_clear()
+            self.root.clipboard_append(selected)
+        except:
+            pass
+
+    # =============================================================================
+    # Validação em tempo real da URL
+    # =============================================================================
+    def validate_url(self, *args):
+        """Valida a URL em tempo real e atualiza o label de validação com emoji."""
+        if self.validation_label is None:
+            return
+
+        url = self.url_var.get().strip()
+        if not url:
+            self.validation_label.config(text="")
+            return
+
+        if self.is_valid_youtube_url(url):
+            self.validation_label.config(text="✅", foreground="green")
+        else:
+            self.validation_label.config(text="❌", foreground="red")
+
+    # =============================================================================
     # Eventos e utilitários da UI
-    # -----------------------------
+    # =============================================================================
     def remove_focus_on_click(self, event):
         """
         Remove o foco dos campos de entrada caso o clique seja fora deles.
@@ -165,14 +256,12 @@ class YouTubeDownloader:
                 self.url_entry.selection_clear()
                 self.url_entry.icursor(0)
             except Exception:
-
                 pass
             self.root.focus_set()
 
     def select_path(self):
         """
-        Abre caixinha de seleção de diretório e armazena o caminho selecionado em path_var.
-        Mantém o campo em estado de 'somente para leitura'.
+        Abre caixa de seleção do diretório para salvar.
         """
         path = filedialog.askdirectory()
         if path:  # Apenas atualiza se o usuário escolheu algo
@@ -181,9 +270,9 @@ class YouTubeDownloader:
             self.path_var.set(path)
             self.path_entry.config(state="readonly")
 
-    # -----------------------------
+    # =============================================================================
     # Validação de URL
-    # -----------------------------
+    # =============================================================================
     def is_valid_youtube_url(self, url: str) -> bool:
 
         if not url or not isinstance(url, str):
@@ -201,9 +290,9 @@ class YouTubeDownloader:
             return len(path.strip()) > 0
         return False
 
-    # -----------------------------
+    # =============================================================================
     # Início do processo de download
-    # -----------------------------
+    # =============================================================================
     def start_download(self):
         """
         Valida entradas, evita downloads paralelos e dispara uma Thread para executar o download.
@@ -219,6 +308,12 @@ class YouTubeDownloader:
 
         url = self.url_var.get().strip()
         save_path = self.path_var.get().strip()
+
+        # Adicional: Verifica comprimento da URL
+        if len(url) > 180:
+            messagebox.showerror("Erro", "O link é muito longo (mais de 180 caracteres). Por favor, insira um link válido.")
+            self.is_downloading = False
+            return
 
         # Validações com mensagens idênticas às do original
         if not url:
@@ -242,9 +337,9 @@ class YouTubeDownloader:
         thread = threading.Thread(target=self.download, args=(url, save_path), daemon=True)
         thread.start()
 
-    # -----------------------------
+    # =============================================================================
     # Download e hooks do yt_dlp
-    # -----------------------------
+    # =============================================================================
     def download(self, url: str, save_path: str):
         """
         Executa o yt_dlp para baixar o melhor áudio disponível.
@@ -289,7 +384,6 @@ class YouTubeDownloader:
                         ),
                     )
 
-
             self.root.after(0, self.download_finished)
 
         except Exception as e:
@@ -329,9 +423,9 @@ class YouTubeDownloader:
         # Garante que a UI seja redesenhada imediatamente
         self.root.update_idletasks()
 
-    # -----------------------------
+    # =============================================================================
     # Fim do download e reset de estado
-    # -----------------------------
+    # =============================================================================
     def download_finished(self):
         """Executa a finalização visual do download (limpa campos e alerta o usuário)."""
         self.wait_label.config(text="")
@@ -350,9 +444,9 @@ class YouTubeDownloader:
         self.is_downloading = False
 
 
-# -----------------------------
+# =============================================================================
 # Ponto de entrada da aplicação
-# -----------------------------
+# =============================================================================
 def main():
     """Cria a janela principal e inicia o loop do Tkinter."""
     root = tk.Tk()
